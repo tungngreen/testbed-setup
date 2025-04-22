@@ -1,0 +1,17 @@
+---
+- name: Set up and make sure controller has access to all hosts
+  hosts: all
+  gather_facts: no
+
+- import_playbook: hosts/populate_known_hosts.yml
+- import_playbook: hosts/deploy_ssh_config_file.yml
+- import_playbook: hosts/edit_hosts_file.yml
+- import_playbook: hosts/populate_server_ssh_keys.yml
+- import_playbook: hosts/populate_jetson_ssh_keys.yml
+
+- name: Final confirmation play
+  hosts: all
+  tasks:
+    - name: All setup tasks completed successfully
+      ansible.builtin.debug:
+        msg: "All controller setup tasks have finished on {{ inventory_hostname }}."

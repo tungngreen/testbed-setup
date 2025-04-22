@@ -1,0 +1,42 @@
+127.0.0.1       localhost
+127.0.1.1       {{ inventory_hostname }}
+
+# --- Ansible Managed Cluster Hosts ---
+{% set leaf_groups = ['server', 'agxorin', 'agxavier', 'xaviernx', 'orinano', 'nxorin'] %}
+{% set printed_hosts = [] %}
+{% for group_name in leaf_groups %}
+{# 1. Check if the group is defined in the inventory and has members #}
+{% if groups[group_name] is defined and groups[group_name] | length > 0 %}
+
+# {{ group_name }}
+{% for host in groups[group_name] %}
+{# 2. Only print the host if it hasn't been printed yet (avoids duplication) #}
+{% if host not in printed_hosts %}
+{# --- Determine IP Variable Conditionally based on Group --- #}
+{% set target_ip = '127.0.0.1' %}
+{% if host in groups['jetsons'] %}
+{% set ip_creds = hostvars[host]['jetsons_creds'][host] | default({}) %}
+{% set target_ip = ip_creds.ip | default('UNKNOWN_IP') %}
+{% elif host in groups['desktop'] %}
+{% set ip_creds = hostvars[host]['desktop_creds'][host] | default({}) %}
+{% set target_ip = ip_creds.ip | default('UNKNOWN_IP') %}
+{% elif host in groups['server'] %}
+{% set ip_creds = hostvars[host]['server_creds'][host] | default({}) %}
+{% set target_ip = ip_creds.ip | default('UNKNOWN_IP') %}
+{% endif %}
+{# Only print if a valid IP was found #}
+{% if target_ip != 'UNKNOWN_IP' %}
+{{ target_ip }} {{ host }}
+{% set printed_hosts = printed_hosts + [host] %}
+{% endif %}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+
+# The following lines are desirable for IPv6 capable hosts
+::1     ip6-localhost ip6-loopback
+fe00::0 ip6-localnet
+ff00::0 ip6-mcastprefix
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters

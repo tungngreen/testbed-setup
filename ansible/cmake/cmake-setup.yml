@@ -1,0 +1,119 @@
+---
+- name: Install Cmake on servers
+  hosts: all
+  vars_files:
+    - "{{ inventory_dir }}/group_vars/versions.yml"
+
+  pre_tasks:
+  - name: Set host-specific credentials for servers
+    set_fact:
+      ansible_user: "{{ server_creds[inventory_hostname].user }}"
+      ansible_password: "{{ server_creds[inventory_hostname].password }}"
+      ansible_become_password: "{{ server_creds[inventory_hostname].become_pass }}"
+    when: inventory_hostname in groups['server']
+  - name: Set host-specific credentials for desktops
+    set_fact:
+      ansible_user: "{{ desktop_creds[inventory_hostname].user }}"
+      ansible_password: "{{ desktop_creds[inventory_hostname].password }}"
+      ansible_become_password: "{{ desktop_creds[inventory_hostname].become_pass }}"
+    when: inventory_hostname in groups['desktop']
+  - name: Set Ansible connection variables
+    set_fact:
+      ansible_ssh_user: "{{ ansible_user }}"
+      ansible_ssh_pass: "{{ ansible_password }}"
+
+  - name: Set cmake linux paths
+    set_fact:
+      cmake_script_download_link: "https://github.com/Kitware/CMake/releases/download/v{{ versions.cmake }}/cmake-{{ versions.cmake }}-linux-{{ ansible_architecture }}.sh"
+      cmake_script_download_path: "/tmp/cmake-install.sh"
+      cmake_extract_path: "/opt/cmake-{{ versions.cmake }}-linux-{{ ansible_architecture }}"
+
+  - name: Print Cmake download link
+    debug:
+      msg: "CMake download link: {{ cmake_script_download_link }}"
+  - name: Print download path
+    debug:
+      msg: "CMake download path: {{ cmake_script_download_path }}"
+  - name: Print extract path
+    debug:
+      msg: "CMake extract path: {{ cmake_extract_path }}"
+  
+
+  tasks:
+    - name: Check if CMake is already installed
+      command: cmake --version
+      register: cmake_check
+      ignore_errors: true
+      changed_when: false
+
+    - name: Parse installed CMake version
+      set_fact:
+        installed_cmake_version: "{{ cmake_check.stdout.split()[2] }}"
+      when: cmake_check.rc == 0
+
+    - name: Stop if correct CMake version is installed
+      meta: end_play
+      when: installed_cmake_version is defined and installed_cmake_version == versions.cmake
+
+    - name: Install build dependencies on Debian/Ubuntu
+      apt:
+        name:
+          - build-essential
+          - libssl-dev
+          - libncurses5-dev
+          - libncursesw5-dev
+          - wget
+          - ca-certificates
+        state: present
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+      become: true
+
+    - name: Download and extract CMake script
+      get_url:
+        url: "{{ cmake_script_download_link }}"
+        dest: "{{ cmake_script_download_path }}"
+        mode: '0755'
+      become: true
+
+    - name: Install CMake
+      shell: |
+        mkdir -p {{ cmake_extract_path }}
+        {{ cmake_script_download_path }} --skip-license --prefix={{ cmake_extract_path }}
+      become: true
+    
+    - name: Remove previous CMake version links
+      shell: |
+        rm /usr/local/bin/cmake
+        rm /usr/local/bin/ccmake
+        rm /usr/local/bin/cpack
+        rm /usr/local/bin/ctest
+        rm /usr/local/bin/cmake-gui
+        rm /usr/local/bin/cmake-curses-gui
+      ignore_errors: true
+      become: true
+
+
+    - name: Link CMake to /usr/local/bin
+      shell: |
+        ln -s {{ cmake_extract_path }}/bin/cmake /usr/local/bin/cmake
+        ln -s {{ cmake_extract_path }}/bin/ccmake /usr/local/bin/ccmake
+        ln -s {{ cmake_extract_path }}/bin/cpack /usr/local/bin/cpack
+        ln -s {{ cmake_extract_path }}/bin/ctest /usr/local/bin/ctest
+        ln -s {{ cmake_extract_path }}/bin/cmake-gui /usr/local/bin/cmake-gui
+        ln -s {{ cmake_extract_path }}/bin/cmake-curses-gui /usr/local/bin/cmake-curses-gui
+      become: true
+
+    - name: Clean up
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ cmake_script_download_path }}"
+      become: true
+
+    - name: Check if CMake is installed
+      command: cmake --version
+      register: cmake_check
+      ignore_errors: true
+      changed_when: false

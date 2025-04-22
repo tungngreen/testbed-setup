@@ -1,0 +1,1 @@
+Setup and install cmake with the version supplied `ansible/inventory/group_vars`

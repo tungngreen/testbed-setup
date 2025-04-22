@@ -1,0 +1,81 @@
+---
+- name: Setup Fish cells
+  hosts: all
+  gather_facts: yes
+  vars_files:
+    - "{{ inventory_dir }}/group_vars/versions.yml"
+
+  pre_tasks:
+  - name: Set host-specific credentials for servers
+    set_fact:
+      ansible_user: "{{ server_creds[inventory_hostname].user }}"
+      ansible_password: "{{ server_creds[inventory_hostname].password }}"
+      ansible_become_password: "{{ server_creds[inventory_hostname].become_pass }}"
+    when: inventory_hostname in groups['server']
+  - name: Set host-specific credentials for desktops
+    set_fact:
+      ansible_user: "{{ desktop_creds[inventory_hostname].user }}"
+      ansible_password: "{{ desktop_creds[inventory_hostname].password }}"
+      ansible_become_password: "{{ desktop_creds[inventory_hostname].become_pass }}"
+    when: inventory_hostname in groups['desktop']
+  - name: Set Ansible connection variables
+    set_fact:
+      ansible_ssh_user: "{{ ansible_user }}"
+      ansible_ssh_pass: "{{ ansible_password }}."
+
+  tasks:
+    - name: Check if Fish shell is already installed. If so, skip installation.
+      ansible.builtin.command: fish --version
+      register: fish_check
+      ignore_errors: yes
+    - name: Add Fish PPA repository if not already added
+      apt_repository:
+        repo: "ppa:fish-shell/release-3"
+        state: present
+      when: ansible_os_family == "Debian" and fish_check.rc != 0
+      register: fish_repo
+      changed_when: fish_repo is not defined or fish_repo is changed
+      retries: 3
+      delay: 5
+      until: fish_repo is succeeded
+      become: true
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+      when: ansible_os_family == "Debian" and fish_check.rc != 0
+      become: true
+    - name: Install Fish shell
+      apt:
+        name: fish
+        state: present
+      become: true
+    - name: Setup fish as the default shell
+      command: chsh -s /usr/bin/fish {{ ansible_user }}
+      become: true
+      when: inventory_hostname not in groups['jetsons'] # Only for the servers where we have our own users
+    - name: Check local controller. Only synchronize configs from a desktop controller. Otherwise, skip all.
+      ansible.builtin.meta: end_play
+      when: "'desktop' not in group_names or inventory_hostname != groups['desktop'][0]"
+    - name: Synchronize Fish config files from controller to target hosts
+      synchronize:
+        # Source and destination paths are correct
+        src: "/home/{{ ansible_user }}/.config/fish/fish_variables"
+        dest: "/home/{{ ansible_user }}/.config/fish/fish_variables"
+        mode: push
+
+        # 'archive: yes' already implies preserving most attributes (including owner), 
+        # but we are using --chown to ensure the owner is set explicitly.
+        archive: yes 
+        
+        rsync_opts:
+          - "--chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r"
+          - "--chown={{ ansible_user }}:{{ ansible_user }}"
+          
+      # Since we are modifying a user file, we still need to run the rsync command 
+      # on the remote host with escalated privileges (become: true) 
+      # and switch to the target user (become_user: ansible_user).
+      become: true
+      become_user: "{{ ansible_user }}"
+      when: inventory_hostname not in groups['jetsons']
+
+    # when: "'jetsons' not in group_names" works fine too.

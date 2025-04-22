@@ -1,0 +1,27 @@
+- name: Distribute SSH keys to jetson hosts
+  hosts: jetsons
+  gather_facts: no
+  become_method: su
+  vars_files:
+    - "{{ inventory_dir }}/group_vars/jetson_vault.yml"
+
+  # For jetson hosts, credentials are already defined directly
+  pre_tasks:
+    - name: Set Ansible connection variables
+      set_fact:
+        ansible_ssh_user: "{{ ansible_user }}"
+        ansible_ssh_pass: "{{ ansible_password }}"
+      no_log: true
+
+  tasks:
+    - name: Copy Ansible public key to remote hosts
+      authorized_key:
+        user: "{{ ansible_user }}"
+        state: present
+        key: "{{ lookup('file', '~/.ssh/ansible_id_ed25519.pub') }}"
+    
+    - name: Copy public key to remote hosts
+      authorized_key:
+        user: "{{ ansible_user }}"
+        state: present
+        key: "{{ lookup('file', '~/.ssh/id_ed25519.pub') }}"

@@ -1,0 +1,29 @@
+# .github/workflows/sync-upstream.yml
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: '*/1 * * * *'  # every 5 minutes
+  workflow_dispatch:       # manual trigger
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0   # full history if you want to merge
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Add upstream
+        run: git remote add upstream https://github.com/tungngreen/testbed-automation.git
+      - name: Merge upstream
+        run: |
+          git fetch upstream
+          git merge upstream/master --allow-unrelated-histories
+
+      - name: Push merge to origin
+        run: git push origin HEAD:master

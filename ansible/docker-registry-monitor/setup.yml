@@ -1,0 +1,52 @@
+---
+- name: Run monitoring script on controller
+  hosts: controller
+  gather_facts: no
+  become: yes
+  vars_files:
+    - "{{ inventory_dir }}/group_vars/docker_monitored_images.yml"
+    - "{{ inventory_dir }}/group_vars/registry_vault.yml"
+    - "{{ inventory_dir }}/group_vars/slack_hooks_vault.yml"
+
+  pre_tasks:
+    - name: Set host-specific credentials for servers
+      set_fact:
+        ansible_user: "{{ credentials[inventory_hostname].user }}"
+        ansible_password: "{{ credentials[inventory_hostname].password }}"
+        ansible_become_password: "{{ credentials[inventory_hostname].become_pass }}"
+      when: inventory_hostname not in groups['jetsons']
+
+  tasks:
+    - name: Create /etc/var directory if it doesn't exist
+      file:
+        path: /etc/var
+        state: directory
+        mode: '0755'
+
+    - name: Generate monitored images file
+      copy:
+        dest: /etc/var/docker_monitored_images.txt
+        content: |
+          {% for image in docker_images %}
+          {{ image }}
+          {% endfor %}
+        mode: '0644'
+
+    - name: Deploy registry-monitor.sh
+      copy:
+        src: registry-monitor.sh
+        dest: /usr/local/bin/registry-monitor.sh
+        mode: '0755'
+
+    - name: Setup cron job to run registry-monitor.sh
+      cron:
+        name: "Check private registry images"
+        minute: "*/5"
+        hour: "*"
+        job: "/usr/local/bin/registry-monitor.sh {{ registry.url }} /etc/var/docker_monitored_images.txt {{ slack_hooks.registry_bot }}"
+
+    # - name: Run registry-monitor.sh manually once (optional)
+    #   shell: |
+    #     /usr/local/bin/registry-monitor.sh {{ registry.url }} /etc/var/docker_monitored_images.txt {{ slack_hooks.registry_bot }}
+    #   register: registry_check_output
+    #   ignore_errors: yes

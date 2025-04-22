@@ -1,0 +1,67 @@
+[desktop]
+minty ansible_host=minty ansible_shell_executable=/bin/bash
+
+[server]
+bulbasaur ansible_host=bulbasaur
+lugia ansible_host=lugia
+mewtwo ansible_host=mewtwo
+crystal ansible_host=crystal
+squirtle ansible_host=squirtle
+charmander ansible_host=charmander
+
+[agxorin]
+agxorin-1 ansible_host=agxorin-1
+agxorin-2 ansible_host=agxorin-2
+agxorin-3 ansible_host=agxorin-3
+agxorin-4 ansible_host=agxorin-4
+
+[agxavier]
+agxavier-1 ansible_host=agxavier-1
+agxavier-2 ansible_host=agxavier-2
+agxavier-3 ansible_host=agxavier-3
+
+[xaviernx]
+xaviernx-1 ansible_host=xaviernx-1
+xaviernx-2 ansible_host=xaviernx-2
+xaviernx-3 ansible_host=xaviernx-3
+xaviernx-4 ansible_host=xaviernx-4
+xaviernx-5 ansible_host=xaviernx-5
+
+[orinano]
+orinano-1 ansible_host=orinano-1
+orinano-2 ansible_host=orinano-2
+orinano-3 ansible_host=orinano-3
+
+[nxorin]
+nxorin-1 ansible_host=nxorin-1
+nxorin-2 ansible_host=nxorin-2
+nxorin-3 ansible_host=nxorin-3
+
+[jetsons:children]
+agxorin
+agxavier
+xaviernx
+orinano
+nxorin
+
+[bulky]
+bulbasaur
+lugia
+crystal
+charmander
+
+[lean]
+mewtwo
+squirtle
+
+[lean:children]
+agxavier
+
+[bony:children]
+xaviernx
+orinano
+nxorin
+
+[controller]
+bulbasaur
+minty

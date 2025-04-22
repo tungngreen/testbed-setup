@@ -1,0 +1,4 @@
+---
+vars_files:
+  - jetson_vault.yml
+  - versions.yml

@@ -1,0 +1,12 @@
+---
+versions:
+  docker_ce: "5:27.5.1"
+  docker_ce_cli: "5:27.5.1"
+  containerd_io: "1.7.25-1"
+  docker_compose_plugin: "2.32.4-1"
+  docker_compose: ""
+  nvidia_driver: "580"
+  cuda: "12-6"
+  cudnn: "9.3.0-1"
+  cmake: "3.25.2"
+  grpc: "1.62.0"

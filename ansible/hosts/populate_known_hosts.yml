@@ -1,0 +1,21 @@
+---
+- name: Run Cleanup Script on Ansible Controller Node
+  hosts: controller 
+  gather_facts: no
+  connection: local
+
+  tasks:
+    - name: Ensure the script file is executable
+      file:
+        # Explicitly referencing the full path using playbook_dir
+        path: "{{ playbook_dir }}/populate_known_hosts.sh"
+        mode: "+x"
+        state: file
+      delegate_to: localhost
+
+    - name: Execute the populate_known_hosts.sh script
+      # FIX: Use the full path variable 'inventory_file' instead of trying 
+      # to reconstruct it with 'inventory_dir/hosts', which was failing.
+      script: "{{ playbook_dir }}/populate_known_hosts.sh {{ inventory_file }}"
+      delegate_to: localhost
+      changed_when: true

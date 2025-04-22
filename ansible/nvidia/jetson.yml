@@ -1,0 +1,13 @@
+---
+- name: Install NVIDIA Jetson packages
+  hosts: jetsons
+  gather_facts: yes
+  become: yes
+
+  tasks:
+    - name: Install NVIDIA Jetson packages
+      apt:
+        name:
+          - nvidia-jetpack
+        state: present
+      become: true

@@ -1,0 +1,92 @@
+---
+- name: Install CUDA Toolkit
+  hosts: server
+  gather_facts: no
+  become: yes
+  vars_files:
+    - "{{ inventory_dir }}/group_vars/versions.yml"
+
+  pre_tasks:
+  - name: Set host-specific credentials for servers
+    set_fact:
+      ansible_user: "{{ server_creds[inventory_hostname].user }}"
+      ansible_password: "{{ server_creds[inventory_hostname].password }}"
+      ansible_become_password: "{{ server_creds[inventory_hostname].become_pass }}"
+    when: inventory_hostname not in groups['jetsons']
+    # when: "'jetsons' not in group_names" works fine too.
+
+  tasks:
+    - name: Add NVIDIA package repositories
+      shell: |
+        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
+        sudo mv cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
+      become: true
+      # Try to copy file from local machine to remote host
+      # but if the file is not present, switch to download method
+
+    - name: Define local path for CUDA Deb file
+      ansible.builtin.set_fact:
+        cuda_deb_local_path: "./cuda-repo-ubuntu2204-12-6-local_12.6.0-560.28.03-1_amd64.deb"
+
+    - name: Check if CUDA Deb file exists locally on control node
+      ansible.builtin.stat:
+        path: "{{ cuda_deb_local_path }}"
+      delegate_to: localhost # Run this check on the control node
+      run_once: true         # Only run once even if multiple target hosts
+      register: local_cuda_deb_status
+      become: false # No need for sudo on control node
+
+    - name: Check if CUDA Deb file exists on remote host
+      ansible.builtin.stat:
+        path: "/home/{{ ansible_user }}/cuda-repo-ubuntu2204-12-6-local_12.6.0-560.28.03-1_amd64.deb"
+      register: remote_cuda_deb_status
+
+    - name: Copy CUDA Deb file from control node if present locally and not on remote
+      ansible.builtin.copy:
+        src: "{{ cuda_deb_local_path }}"
+        dest: "/home/{{ ansible_user }}/cuda-repo-ubuntu2204-12-6-local_12.6.0-560.28.03-1_amd64.deb"
+        mode: '0644'
+      when: local_cuda_deb_status.stat.exists and not remote_cuda_deb_status.stat.exists
+
+    - name: Download CUDA Deb file from URL if not found locally or on remote
+      ansible.builtin.get_url:
+        url: "https://developer.download.nvidia.com/compute/cuda/12.6.0/local_installers/cuda-repo-ubuntu2204-12-6-local_12.6.0-560.28.03-1_amd64.deb"
+        dest: "/home/{{ ansible_user }}/cuda-repo-ubuntu2204-12-6-local_12.6.0-560.28.03-1_amd64.deb"
+        mode: '0644'
+      when: not local_cuda_deb_status.stat.exists and not remote_cuda_deb_status.stat.exists
+      
+    - name: Install CUDA repository
+      apt:
+        deb: /home/{{ ansible_user }}/cuda-repo-ubuntu2204-12-6-local_12.6.0-560.28.03-1_amd64.deb
+        state: present
+      become: true
+    - name: Add NVIDIA GPG key
+      shell: |
+        sudo cp /var/cuda-repo-ubuntu2204-12-6-local/cuda-*-keyring.gpg /usr/share/keyrings/
+      become: true
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+      become: true
+    - name: Install CUDA Toolkit
+      apt:
+        name: "cuda-toolkit-{{ versions.cuda }}"
+        state: present
+      become: true
+    - name: Install NVIDIA driver
+      apt:
+        name: "cuda-drivers"
+        state: present
+      become: true
+    - name: Reboot the system
+      reboot:
+        msg: "Rebooting to apply CUDA installation"
+        connect_timeout: 10
+        reboot_timeout: 600
+        test_command: whoami
+      become: true
+    - name: Test CUDA installation
+      shell: |
+        nvidia-smi
+      register: cuda_test
+      become: true

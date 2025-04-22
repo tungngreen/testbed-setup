@@ -1,0 +1,53 @@
+---
+- name: Configure and Mount Data Disks on Bulbasaur
+  hosts: bulbasaur # Target the specific host 'bulbasaur'
+  become: yes      # This playbook requires root privileges for filesystem operations and fstab modification
+  gather_facts: no # Not strictly needed for these tasks, but can be useful for debugging
+
+  pre_tasks:
+    - name: Set host-specific credentials for servers
+      set_fact:
+        ansible_user: "{{ credentials[inventory_hostname].user }}"
+        ansible_password: "{{ credentials[inventory_hostname].password }}"
+        ansible_become_password: "{{ credentials[inventory_hostname].become_pass }}"
+      when: inventory_hostname not in groups['jetsons']
+
+  tasks:
+    - name: Create mount points for non-root data disks
+      ansible.builtin.file:
+        path: "/{{ item.key }}" # Constructs mount path, e.g., /ssd0, /ssd1
+        state: directory        # Ensures the path is a directory
+        owner: root             # Sets ownership to root
+        group: root             # Sets group to root
+        mode: '0755'            # Sets directory permissions (read/write/execute for owner, read/execute for others)
+      # Loop over the 'disks' dictionary for the 'bulbasaur' host from the 'credentials' variable.
+      # `dict2items` transforms the dictionary into a list of key-value pairs (e.g., {key: 'ssd0', value: {uuid: ..., size: ...}})
+      loop: "{{ credentials.bulbasaur.disks | dict2items }}"
+      # Skip this task if the disk's 'note' is 'root', as the root filesystem already has a mount point
+      when: item.value.note | default('') != 'root'
+
+    - name: Ensure non-root data disks are mounted and added to /etc/fstab
+      ansible.posix.mount:
+        src: "UUID={{ item.value.uuid }}" # Specifies the source of the mount (the disk's UUID)
+        path: "/{{ item.key }}"           # Specifies the mount point path
+        fstype: ext4                      # **IMPORTANT: Assumes 'ext4' filesystem type. Change this if your disks are formatted differently (e.g., 'xfs')**
+        opts: defaults                    # Standard mount options (rw, suid, dev, exec, auto, nouser, async)
+        state: mounted                    # Ensures the filesystem is mounted and an fstab entry exists
+      loop: "{{ credentials.bulbasaur.disks | dict2items }}"
+      # Skip this task if the disk's 'note' is 'root'
+      when: item.value.note | default('') != 'root'
+
+    # - name: Verify disk mounts
+    #   ansible.builtin.command: df -h /{{ item.key }}
+    #   register: mount_check_output
+    #   changed_when: false # This task doesn't change anything, just checks
+    #   loop: "{{ credentials.bulbasaur.disks | dict2items }}"
+    #   when: item.value.note | default('') != 'root'
+    #   failed_when: mount_check_output.rc != 0 or 'No such file or directory' in mount_check_output.stderr
+    #   args:
+    #     warn: false # Suppress warning about using command module with changing loop vars
+    - name: Display mount status
+      ansible.builtin.debug:
+        msg: "Disk {{ item.key }} mounted status: {{ mount_check_output.results[ansible_loop.index0].stdout }}"
+      loop: "{{ credentials.bulbasaur.disks | dict2items }}"
+      when: item.value.note | default('') != 'root' and mount_check_output.results[ansible_loop.index0] is defined and mount_check_output.results[ansible_loop.index0].stdout is defined

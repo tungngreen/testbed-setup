@@ -1,0 +1,46 @@
+---
+- name: Edit host names with names from inventory
+  hosts: controller
+  gather_facts: no
+  become: yes
+
+  pre_tasks:
+  - name: Set host-specific credentials for servers
+    set_fact:
+      ansible_user: "{{ server_creds[inventory_hostname].user }}"
+      ansible_password: "{{ server_creds[inventory_hostname].password }}"
+      ansible_become_password: "{{ server_creds[inventory_hostname].become_pass }}"
+    when: inventory_hostname in groups['server']
+    # when: "'jetsons' not in group_names" works fine too.
+  - name: Set host-specific credentials for desktops
+    set_fact:
+      ansible_user: "{{ desktop_creds[inventory_hostname].user }}"
+      ansible_password: "{{ desktop_creds[inventory_hostname].password }}"
+      ansible_become_password: "{{ desktop_creds[inventory_hostname].become_pass }}"
+    when: inventory_hostname in groups['desktop']
+      
+  - name: Set Ansible connection variables
+    set_fact:
+      ansible_ssh_user: "{{ ansible_user }}"
+      ansible_ssh_pass: "{{ ansible_password }}"
+
+  tasks:
+  - name: Update /etc/hosts with cluster Inventory
+    template:
+      src: "{{ inventory_dir }}/template_hosts_file.j2"
+      dest: /etc/hosts
+      owner: root
+      group: root
+      mode: '0644'
+    # - name: Set the hostname
+    #   ansible.builtin.hostname:
+    #     name: "{{ inventory_hostname }}"
+    #   when: inventory_hostname is defined
+
+    # - name: Update /etc/hosts with new hostname
+    #   lineinfile:
+    #     path: /etc/hosts
+    #     regexp: "^{{ ip_addr | regex_escape }}\\s+"
+    #     line: "{{ ip_addr }} {{ inventory_hostname }}"
+    #     state: present
+    #   when: inventory_hostname is defined and ip_addr is defined

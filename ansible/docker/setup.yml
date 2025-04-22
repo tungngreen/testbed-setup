@@ -1,0 +1,177 @@
+---
+- name: Install Docker on all devices
+  hosts: server, jetsons
+  gather_facts: yes
+  vars_files:
+    - "{{ inventory_dir }}/group_vars/versions.yml"
+
+  vars:
+    # Set the minimum required version
+    required_docker_version: "{{ versions.docker_ce }}"
+
+
+  pre_tasks:
+  - name: Set host-specific credentials for servers
+    set_fact:
+      ansible_user: "{{ server_creds[inventory_hostname].user }}"
+      ansible_password: "{{ server_creds[inventory_hostname].password }}"
+      ansible_become_password: "{{ server_creds[inventory_hostname].become_pass }}"
+    when: inventory_hostname in groups['server']
+  - name: Set host-specific credentials for desktops
+    set_fact:
+      ansible_user: "{{ desktop_creds[inventory_hostname].user }}"
+      ansible_password: "{{ desktop_creds[inventory_hostname].password }}"
+      ansible_become_password: "{{ desktop_creds[inventory_hostname].become_pass }}"
+    when: inventory_hostname in groups['desktop']
+  - name: Set Ansible connection variables
+    set_fact:
+      ansible_ssh_user: "{{ ansible_user }}"
+      ansible_ssh_pass: "{{ ansible_password }}"
+
+  tasks:
+    # CLEAN SLATE: Remove the broken repo file if it exists
+    # This stops 'apt update' from failing due to previous bad configs
+    - name: Remove existing Docker repository file to fix update errors
+      file:
+        path: /etc/apt/sources.list.d/docker.list
+        state: absent
+      become: yes
+    - name: Remove existing (potentially corrupt) Docker GPG key
+      file:
+        path: /usr/share/keyrings/docker-archive-keyring.gpg
+        state: absent
+      become: yes
+
+    - name: Install required packages
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+        update_cache: yes
+      become: yes # After apt's cache update,  ensure this is run with sudo otherwise it will fail "permission denied"
+
+    # Ensure the directory for the keyrings exists
+    - name: Ensure keyrings directory exists
+      file:
+        path: /usr/share/keyrings
+        state: directory
+        mode: '0755'
+      become: yes
+
+    # Download the key with CORRECT PERMISSIONS
+    # If this file is not readable by the '_apt' user (i.e., if it's 0600), apt will fail.
+    - name: Download Docker GPG key
+      shell: |
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+      args:
+        creates: /usr/share/keyrings/docker-archive-keyring.gpg
+      become: yes
+
+    - name: Set permissions on Docker GPG key
+      file:
+        path: /usr/share/keyrings/docker-archive-keyring.gpg
+        mode: '0644'  # <--- CRITICAL: Must be world-readable
+      become: yes
+
+    # Map Architecture (x86_64 -> amd64)
+    - name: Map architecture to dpkg format
+      set_fact:
+        deb_architecture: >-
+          {%- if ansible_architecture == 'x86_64' -%}amd64
+          {%- elif ansible_architecture == 'aarch64' -%}arm64
+          {%- else -%}{{ ansible_architecture }}{%- endif -%}
+
+    # Add Repo using the mapped architecture and specific keyring
+    - name: Add Docker APT repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch={{ deb_architecture }} signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+        filename: docker
+        update_cache: yes
+      become: yes
+
+    - name: Update APT cache
+      apt:
+        update_cache: yes
+      become: yes # After apt's cache update,  ensure this is run with sudo otherwise it will fail "permission denied"
+    
+
+    # Find the latest Docker version that meets the minimum requirement
+    - name: Find suitable Docker version to install
+      vars:
+        final_docker_version: ""
+        final_containerd_version: ""
+      block:
+      - name: Get all available versions from apt cache
+        # This task fetches a raw list of all versions.
+        ansible.builtin.shell: |
+          apt-cache madison docker-ce | awk '{print $3}' | sort -u
+        register: available_versions
+        changed_when: false
+        # Ensure we run this with privileges if apt-cache requires it
+
+      - name: Filter docker versions and select the closest one (handle empty list)
+        ansible.builtin.set_fact:
+          # Filter the list using the required minimum version.
+          # We now use the | min filter to select the SMALLEST version 
+          # that satisfies the '>= ' condition.
+          final_docker_version: 
+            >
+            {% set valid_versions = available_versions.stdout_lines 
+            | select('version_compare', required_docker_version, '>=') 
+            | list %}
+            {% if valid_versions | length > 0 %}
+            {{ valid_versions | min }}
+            {% else %}
+              "NONE_FOUND" # Set a specific string flag instead of failing Jinja2
+            {% endif %}
+        changed_when: false
+
+      - name: FAIL if no suitable version was found
+        ansible.builtin.fail:
+          msg: "FATAL: No Docker version found (>= {{ versions.docker_ce }}) in the APT cache for {{ inventory_hostname }}. Check if Docker repository is configured and 'apt update' was run."
+        when: final_docker_version == "NONE_FOUND"
+
+      - name: Report selected version
+        ansible.builtin.debug:
+          msg: "Target version {{ versions.docker_ce }} satisfied. Installing newest version: {{ final_docker_version }}"
+        # This task only runs if task 3 (FAIL) did not execute.
+        when: final_docker_version != "NONE_FOUND"
+
+      - name: Install Docker packages
+        apt:
+          name:
+            - "docker-ce={{ final_docker_version | trim }}"
+            - "docker-ce-cli={{ final_docker_version | trim}}"
+            - "containerd.io"
+          state: present
+          allow_downgrade: yes
+        become: yes
+
+    - name: Wait 10s for Docker daemon to be ready
+      ansible.builtin.pause:
+        seconds: 10
+
+    - name: Enable and start Docker
+      systemd:
+        name: docker
+        enabled: true
+        state: started
+        daemon_reload: yes
+      become: yes
+      register: docker_start_result
+      until: docker_start_result is success
+      retries: 5
+      delay: 15
+
+    - name: Add current user to docker group
+      user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: yes
+      when: ansible_user != 'root'
+      become: yes

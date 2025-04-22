@@ -1,0 +1,98 @@
+- name: Install NVIDIA driver
+  hosts: server
+  gather_facts: yes # Changed to yes to detect OS distribution and kernel version
+  become: yes
+  vars_files:
+    - "{{ inventory_dir }}/group_vars/server/versions.yml"
+    # Assumes versions.yml contains a variable: nvidia_driver: "535"
+
+  pre_tasks:
+    - name: Set host-specific credentials for servers
+      set_fact:
+        ansible_user: "{{ server_creds[inventory_hostname].user }}"
+        ansible_password: "{{ server_creds[inventory_hostname].password }}"
+        ansible_become_password: "{{ server_creds[inventory_hostname].become_pass }}"
+      when: inventory_hostname not in groups['jetsons']
+
+  tasks:
+    # 1. Check current status
+    - name: Check if NVIDIA driver is currently loaded
+      shell: "nvidia-smi --query-gpu=driver_version --format=csv,noheader"
+      register: current_driver_output
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Parse current driver major version
+      set_fact:
+        # Extracts "535" from "535.129.03". Defaults to "0" if command failed.
+        current_version_major: "{{ current_driver_output.stdout.split('.')[0] if current_driver_output.rc == 0 else '0' }}"
+    - name: Set target NVIDIA driver version
+      set_fact:
+        target_driver_version: "{{ versions.nvidia_driver }}"
+
+    - name: Debug version comparison
+      debug:
+        msg: "Current: {{ current_version_major }}, Target: {{ target_driver_version }}"
+
+    # 2. Installation Block (Only runs if versions don't match)
+    - name: Install NVIDIA Driver
+      block:
+        - name: Blacklist Nouveau driver (Required for NVIDIA installation)
+          copy:
+            dest: /etc/modprobe.d/blacklist-nouveau.conf
+            content: |
+              blacklist nouveau
+              options nouveau modeset=0
+          register: blacklist_nouveau
+
+        - name: Update initramfs if Nouveau was blacklisted
+          command: update-initramfs -u
+          when: blacklist_nouveau.changed
+
+        - name: Ensure build dependencies are installed
+          apt:
+            name:
+              - build-essential
+              - "linux-headers-{{ ansible_kernel }}"
+            state: present
+            update_cache: yes
+
+        - name: Remove old NVIDIA packages (optional safety step)
+          apt:
+            name: "nvidia-*"
+            state: absent
+            purge: yes
+          when: current_version_major != '0' and current_version_major != target_driver_version
+
+        - name: Install the specified NVIDIA driver
+          apt:
+            name: 
+              - "nvidia-driver-{{ target_driver_version }}"
+              - "nvidia-utils-{{ target_driver_version }}"
+            state: present
+            update_cache: yes
+          register: driver_install
+
+        - name: Reboot the server to load new drivers
+          reboot:
+            msg: "Rebooting to load NVIDIA drivers"
+            connect_timeout: 5
+            reboot_timeout: 600
+            pre_reboot_delay: 0
+            post_reboot_delay: 30
+            test_command: whoami
+          when: driver_install.changed or blacklist_nouveau.changed
+
+      # Condition: Run block if driver is missing OR version is different
+      when: current_version_major != target_driver_version
+
+    # 3. Verify
+    - name: Verify newly installed driver version
+      shell: "nvidia-smi --query-gpu=driver_version --format=csv,noheader"
+      register: new_driver_output
+      changed_when: false
+      failed_when: new_driver_output.rc != 0
+
+    - name: Display final version
+      debug:
+        msg: "NVIDIA Driver verification successful. Version: {{ new_driver_output.stdout }}"

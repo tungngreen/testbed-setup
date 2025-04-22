@@ -1,0 +1,38 @@
+
+---
+- name: Distribute SSH keys to server hosts
+  hosts: controller # Target the controller hosts only
+  gather_facts: yes
+  vars_files:
+    - "{{ inventory_dir }}/group_vars/versions.yml"
+    - "{{ inventory_dir }}/group_vars/server/server_vault.yml"
+    - "{{ inventory_dir }}/group_vars/jetsons/jetsons_vault.yml"
+    - "{{ inventory_dir }}/group_vars/desktop/desktop_vault.yml"
+  
+  pre_tasks:
+    # 1. Credentials for the 'jetsons' group
+    - name: Set host-specific credentials for jetsons group
+      set_fact:
+        ansible_user: "{{ ansible_user }}"
+      # The condition checks if the current host is a member of the 'jetsons' group.
+      when: "'jetsons' in group_names"
+
+    # 2. Credentials for the 'server' group (and all others, or a specific other group)
+    - name: Set host-specific credentials for servers
+      set_fact:
+        ansible_user: "{{ server_creds[inventory_hostname].user }}"
+      # The condition checks if the current host is NOT a member of the 'jetsons' group.
+      # This acts as the default for all other hosts.
+      when: "'server' in group_names"
+    - name: Set host-specific credentials for desktops
+      set_fact:
+        ansible_user: "{{ desktop_creds[inventory_hostname].user }}"
+      when: "'desktop' in group_names"
+  tasks:
+  - name: Deploy SSH config file
+    template:
+      src: "{{ inventory_dir }}/template_ssh_config.j2"
+      dest: "{{ ansible_user_dir }}/.ssh/config" # Deploy to the user's home directory
+      owner: "{{ ansible_user }}"
+      group: "{{ ansible_user }}"
+      mode: '0600'

@@ -1,0 +1,47 @@
+- name: Master Ansible Setup
+  hosts: all
+
+  tasks:
+    - name: Host handshake initiation to ensure controller has access to all hosts
+      include_tasks: ansible/comm_initiation.yml
+
+    - name: Fish shell setup on all hosts
+      include_tasks: ansible/fish/fish-setup.yml
+    
+    - name: Docker setup on all hosts
+      include_tasks: ansible/docker/setup.yml
+
+    - name: CMake setup on all hosts
+      include_tasks: ansible/cmake/cmake-setup.yml
+    
+    - name: Jetpack Setup on Jetson devices
+      include_tasks: ansible/nvidia/jetson.yml
+      when: "'jetsons' in group_names"
+    
+    - name: Driver, CUDA, cuDNN, and NVIDIA Container Toolkit setup on Servers
+      when: "'server' in group_names"
+      block:
+      - name: Driver Setup on Servers
+        include_tasks: ansible/nvidia/driver_server.yml
+        when: "'server' in group_names"
+
+      - name: CUDA Setup on Servers
+        include_tasks: ansible/nvidia/cuda_server.yml
+        when: "'server' in group_names"
+
+      - name: cuDNN Setup on Servers
+        include_tasks: ansible/nvidia/cudnn_server.yml
+        when: "'server' in group_names"
+      
+      - name: NVIDIA Container Toolkit Setup on Servers
+        include_tasks: ansible/nvidia/nvidia-toolkit_server.yml
+        when: "'server' in group_names"
+    
+    - name: Configure Docker daemon on all hosts
+      include_tasks: ansible/nvidia/configure_docker_daemon.yml
+
+    - name: Private Docker Registry CLI setup on all hosts
+      include_tasks: ansible/docker/private_registry_cli.yml
+
+    - name: gRPC setup on all hosts
+      include_tasks: ansible/grpc/setup.yml

@@ -1,0 +1,292 @@
+---
+- name: Building gRPC from source
+  hosts: all
+  gather_facts: yes
+  vars_files:
+    - "{{ inventory_dir }}/group_vars/versions.yml"
+
+  pre_tasks:
+  - name: Set host-specific credentials for servers
+    set_fact:
+      ansible_user: "{{ server_creds[inventory_hostname].user }}"
+      ansible_password: "{{ server_creds[inventory_hostname].password }}"
+      ansible_become_password: "{{ server_creds[inventory_hostname].become_pass }}"
+    when: inventory_hostname in groups['server']
+  - name: Set host-specific credentials for desktops
+    set_fact:
+      ansible_user: "{{ desktop_creds[inventory_hostname].user }}"
+      ansible_password: "{{ desktop_creds[inventory_hostname].password }}"
+      ansible_become_password: "{{ desktop_creds[inventory_hostname].become_pass }}"
+    when: inventory_hostname in groups['desktop']
+  - name: Set Ansible connection variables
+    set_fact:
+      ansible_ssh_user: "{{ ansible_user }}"
+      ansible_ssh_pass: "{{ ansible_password }}"
+    # when: "'jetsons' not in group_names" works fine too.
+
+  - name: Set gRPC build vars
+    set_fact:
+      grpc_dir: "/grpc"
+      grpc_source_dir: "{{ ansible_env.HOME }}/grpc-src"
+      grpc_build_dir: "/grpc/build"
+      grpc_install_dir: "/grpc"
+      grpc_source_link: "https://github.com/grpc/grpc.git"
+      grpc_source_tag: "v{{ versions.grpc }}"
+
+  # Set number of threads for make
+
+  - name: Set number of threads for make
+    set_fact:
+      num_threads: 64
+    when: inventory_hostname in groups['bulky']
+  - name: Set number of threads for make
+    set_fact:
+      num_threads: 16
+    when: inventory_hostname in groups['lean']
+  - name: Set number of threads for make
+    set_fact:
+      num_threads: 3
+    when: inventory_hostname in groups['bony']
+  
+  - name: Print number of threads
+    debug:
+      msg: "Number of threads for make: {{ num_threads }}"
+
+  # Check if gRPC is already installed
+  
+  - name: Find gRPC version from source include
+    shell: |
+      grep '#define GRPC_' /grpc/include/grpcpp/version_info.h
+    register: grpc_version_define
+    changed_when: false
+    ignore_errors: yes
+
+  ### Find gRPC version from the lines in the output
+  - name: Set gRPC version
+    set_fact:
+      grpc_version: "{{ grpc_version_define.stdout_lines[4].split(' ')[2] | replace('\"', '') }}"
+    when: grpc_version_define.rc == 0 and grpc_version_define.stdout_lines | length > 4
+
+  - name: Print gRPC version
+    debug:
+      msg: "gRPC version: {{ grpc_version }}"
+    when: grpc_version is defined
+
+  - name: Check if correct version is installed
+    set_fact:
+      skip_host: "{{ grpc_version is defined and grpc_version == versions.grpc }}"
+
+  - name: Debug variables
+    debug:
+      msg: |
+        grpc_version: "{{ grpc_version | default('undefined') }}"
+        versions.grpc: "{{ versions.grpc | default('undefined') }}"
+        skip_host: "{{ skip_host | default('undefined') }}"
+    check_mode: yes
+
+  - name: Notify if gRPC version is correct
+    debug:
+      msg: "gRPC version {{ grpc_version }} is already installed. Skipping installation."
+    when: skip_host | default(false) | bool
+
+  ### End play for hosts with correct gRPC version
+  - name: End play for hosts with correct gRPC version
+    meta: end_host
+    when: skip_host | default(false) | bool
+
+  tasks:
+  # Installation of dependencies
+  - name: Install dependencies
+    package:
+      name: "{{ item }}"
+      state: present
+    loop:
+      - build-essential
+      - autoconf
+      - automake
+      - libtool
+      - pkg-config
+      - libssl-dev
+      - clang
+      - libc++-dev
+    become: true
+
+  # Clone gRPC repository
+  - name: Check if gRPC repository already exists
+    stat:
+      path: "{{ grpc_source_dir }}"
+    register: grpc_repo_info
+
+  ### If existing, remove it
+  # - name: Remove the existing directory if it exists
+  #   file:
+  #     path: "{{ grpc_source_dir }}"
+  #     state: absent
+  #   when: grpc_repo_info.stat.exists
+  
+
+
+  ### Then clone the repository
+  - name: Clone gRPC repository
+    git:
+      repo: "{{ grpc_source_link }}"
+      dest: "{{ grpc_source_dir }}"
+      version: "{{ grpc_source_tag }}"
+      update: no
+      track_submodules: no
+    when: not grpc_repo_info.stat.exists
+    register: grpc_repo
+
+  - name: Initialize and update submodules
+    command: git submodule update --init --recursive
+    args:
+      chdir: "{{ grpc_source_dir }}"
+    when: grpc_repo.changed
+
+  # Building GRPC
+  - name: Create build directory
+    file:
+      path: "{{ grpc_build_dir }}"
+      state: directory
+      mode: '0755'
+    become: true
+
+  ## Building submodules
+  ### Build Abseil
+  - name: Create build directory for Abseil
+    file:
+      path: "{{ grpc_source_dir }}/third_party/abseil-cpp/cmake/build"
+      state: directory
+    become: true
+
+  - name: Configure Abseil
+    command: cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=TRUE {{ grpc_source_dir }}/third_party/abseil-cpp
+    args:
+      chdir: "{{ grpc_source_dir }}/third_party/abseil-cpp/cmake/build"
+    become: true
+
+  - name: Build and install Abseil
+    become: yes
+    command: make -j {{ num_threads }} install
+    args:
+      chdir: "{{ grpc_source_dir }}/third_party/abseil-cpp/cmake/build"
+    become: true
+
+  ### Build C-Ares
+  - name: Create build directory for C-Ares
+    file:
+      path: "{{ grpc_build_dir }}/third_party/cares/cares/cmake/build"
+      state: directory
+    become: true
+
+  - name: Configure C-Ares
+    command: cmake -DCMAKE_BUILD_TYPE=Release {{ grpc_source_dir }}/third_party/cares/cares
+    args:
+      chdir: "{{ grpc_build_dir }}/third_party/cares/cares/cmake/build"
+    become: true
+
+  - name: Build and install C-Ares
+    become: yes
+    command: make -j {{ num_threads }} install
+    args:
+      chdir: "{{ grpc_build_dir }}/third_party/cares/cares/cmake/build"
+    become: true
+
+  ### Build Protobuf
+  - name: Create build directory for Protobuf
+    file:
+      path: "{{ grpc_build_dir }}/third_party/protobuf/cmake/build"
+      state: directory
+    become: true
+
+  - name: Configure Protobuf
+    command: cmake -Dprotobuf_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release -Dprotobuf_ABSL_PROVIDER=package {{ grpc_source_dir }}/third_party/protobuf
+    args:
+      chdir: "{{ grpc_build_dir }}/third_party/protobuf/cmake/build"
+    become: true
+
+  - name: Build and install Protobuf
+    become: yes
+    command: make -j {{ num_threads }} install
+    args:
+      chdir: "{{ grpc_build_dir }}/third_party/protobuf/cmake/build"
+    become: true
+
+  ### Build RE2
+  - name: Create build directory for Re2
+    file:
+      path: "{{ grpc_build_dir }}/third_party/re2/cmake/build"
+      state: directory
+    become: true
+
+  - name: Configure Re2
+    command: cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=TRUE {{ grpc_source_dir }}/third_party/re2
+    args:
+      chdir: "{{ grpc_build_dir }}/third_party/re2/cmake/build"
+    become: true
+
+  - name: Build and install Re2
+    become: yes
+    command: make -j {{ num_threads }} install
+    args:
+      chdir: "{{ grpc_build_dir }}/third_party/re2/cmake/build"
+    become: true
+
+  ### Build Zlib
+  - name: Create build directory for Zlib
+    file:
+      path: "{{ grpc_build_dir }}/third_party/zlib/cmake/build"
+      state: directory
+    become: true
+
+  - name: Configure Zlib
+    command: cmake -DCMAKE_BUILD_TYPE=Release {{ grpc_source_dir }}/third_party/zlib
+    args:
+      chdir: "{{ grpc_build_dir }}/third_party/zlib/cmake/build"
+    become: true
+
+  - name: Build and install Zlib
+    become: yes
+    command: make -j {{ num_threads }} install
+    args:
+      chdir: "{{ grpc_build_dir }}/third_party/zlib/cmake/build"
+    become: true
+  
+  ## Build GRPC
+  - name: Create build directory for gRPC
+    file:
+      path: "{{ grpc_source_dir }}/cmake/build"
+      state: directory
+    become: true
+
+  - name: Configure gRPC
+    command: >
+      cmake
+      -DCMAKE_BUILD_TYPE=Release
+      -DgRPC_INSTALL=ON
+      -DgRPC_BUILD_TESTS=OFF
+      -DgRPC_CARES_PROVIDER=package
+      -DgRPC_ABSL_PROVIDER=package
+      -DgRPC_PROTOBUF_PROVIDER=package
+      -DgRPC_RE2_PROVIDER=package
+      -DgRPC_SSL_PROVIDER=package
+      -DgRPC_ZLIB_PROVIDER=package
+      -DCMAKE_INSTALL_PREFIX={{ grpc_dir }}
+      {{ grpc_source_dir }}
+
+    args:
+      chdir: "{{ grpc_source_dir }}/cmake/build"
+    become: true
+
+  - name: Build gRPC
+    command: make -j {{ num_threads }} install
+    args:
+      chdir: "{{ grpc_source_dir }}/cmake/build"
+    become: true
+
+  - name: Install gRPC
+    become: yes
+    command: make -j {{ num_threads }} install
+    args:
+      chdir: "{{ grpc_source_dir }}/cmake/build"
+    become: true

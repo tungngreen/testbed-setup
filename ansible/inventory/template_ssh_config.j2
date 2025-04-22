@@ -1,0 +1,28 @@
+# --- Ansible Managed SSH Configuration ---
+
+{% set leaf_groups = ['desktop', 'server', 'agxorin', 'agxavier', 'xaviernx', 'orinano', 'nxorin'] %}
+{% set printed_hosts = [] %}
+
+{% for group_name in leaf_groups %}
+{% if groups[group_name] is defined and groups[group_name] | length > 0 %}
+
+# {{ group_name }}
+{% for host in groups[group_name] %}
+{% if host not in printed_hosts %}
+{% set printed_hosts = printed_hosts + [host] %}
+{# --- Determine User Variable Conditionally --- #}
+{% set target_user = 'UNKNOWN_USER' %}
+{% if host in groups['jetsons'] %}
+{% set target_user = hostvars[host]['ansible_user'] | default('UNKNOWN_USER') %}
+{% elif host in groups['desktop'] %}
+{% set target_user = hostvars[host]['desktop_creds'][host].user | default('UNKNOWN_USER') %}
+{% elif host in groups['server'] %}
+{% set target_user = hostvars[host]['server_creds'][host].user | default('UNKNOWN_USER') %}
+{% endif %}
+Host {{ host }}
+  HostName {{ host }}
+  User {{ target_user }}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}

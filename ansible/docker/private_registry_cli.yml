@@ -1,0 +1,51 @@
+---
+- name: Deploy docker.sh and symlink to dockerpv
+  hosts: all
+  gather_facts: no
+
+  vars:
+    source_script: docker.sh
+    deployed_path: /usr/local/bin/docker.sh
+    symlink_path: /usr/local/bin/dockerpv
+
+  pre_tasks:
+  - name: Set host-specific credentials for servers
+    set_fact:
+      ansible_user: "{{ server_creds[inventory_hostname].user }}"
+      ansible_password: "{{ server_creds[inventory_hostname].password }}"
+      ansible_become_password: "{{ server_creds[inventory_hostname].become_pass }}"
+    when: inventory_hostname in groups['server']
+  - name: Set host-specific credentials for desktops
+    set_fact:
+      ansible_user: "{{ desktop_creds[inventory_hostname].user }}"
+      ansible_password: "{{ desktop_creds[inventory_hostname].password }}"
+      ansible_become_password: "{{ desktop_creds[inventory_hostname].become_pass }}"
+    when: inventory_hostname in groups['desktop']
+  - name: Set Ansible connection variables
+    set_fact:
+      ansible_ssh_user: "{{ ansible_user }}"
+      ansible_ssh_pass: "{{ ansible_password }}"
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+      become: yes
+    - name: Install jq
+      apt:
+        name: jq
+        state: present
+      become: yes
+    - name: Copy docker.sh to /usr/local/bin/
+      copy:
+        src: "{{ source_script }}"
+        dest: "{{ deployed_path }}"
+        mode: '0755'
+      become: yes
+
+    - name: Create symlink dockerpv -> docker.sh
+      file:
+        src: "{{ deployed_path }}"
+        dest: "{{ symlink_path }}"
+        state: link
+      become: yes

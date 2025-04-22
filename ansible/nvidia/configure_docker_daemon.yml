@@ -1,0 +1,107 @@
+---
+- name: Configure Docker daemon with insecure registry and runtimes
+  hosts: all
+  gather_facts: no
+  become: yes
+  vars_files:
+    - "{{ inventory_dir }}/group_vars/registry_vault.yml"
+
+  pre_tasks:
+  - name: Set host-specific credentials for servers
+    set_fact:
+      ansible_user: "{{ server_creds[inventory_hostname].user }}"
+      ansible_password: "{{ server_creds[inventory_hostname].password }}"
+      ansible_become_password: "{{ server_creds[inventory_hostname].become_pass }}"
+    when: inventory_hostname in groups['server']
+  - name: Set host-specific credentials for desktops
+    set_fact:
+      ansible_user: "{{ desktop_creds[inventory_hostname].user }}"
+      ansible_password: "{{ desktop_creds[inventory_hostname].password }}"
+      ansible_become_password: "{{ desktop_creds[inventory_hostname].become_pass }}"
+    when: inventory_hostname in groups['desktop']
+  - name: Set Ansible connection variables
+    set_fact:
+      ansible_ssh_user: "{{ ansible_user }}"
+      ansible_ssh_pass: "{{ ansible_password }}"
+
+  tasks:
+    - name: Ensure /etc/docker directory exists
+      file:
+        path: /etc/docker
+        state: directory
+        mode: '0755'
+      become: yes
+
+    - name: Create empty daemon.json if not exists
+      copy:
+        dest: /etc/docker/daemon.json
+        content: '{}'
+        force: no
+      become: yes
+
+    - name: Read existing daemon.json
+      slurp:
+        src: /etc/docker/daemon.json
+      register: daemon_json_raw
+
+    - name: Parse daemon.json content
+      set_fact:
+        daemon_json: "{{ daemon_json_raw['content'] | b64decode | from_json }}"
+    - name: Initialize registry/runtime presence flags
+      set_fact:
+        missing_registry: false
+        missing_runtime: false
+
+    - name: Set fact - insecure registry not present
+      set_fact:
+        missing_registry: true
+      when: registry.url not in (daemon_json.get('insecure-registries', []))
+      become: yes
+
+    - name: Add insecure registry (if missing)
+      set_fact:
+        daemon_json: >-
+          {{
+            daemon_json | combine({
+              'insecure-registries': (daemon_json.get('insecure-registries', []) + [registry.url])
+            }, recursive=True)
+          }}
+      when: missing_registry | default(false)
+      become: yes
+
+    - name: Set fact - nvidia runtime not present
+      set_fact:
+        missing_runtime: true
+      when: "'nvidia' not in daemon_json.get('runtimes', {})"
+
+    - name: Add 'nvidia' runtime (if missing)
+      set_fact:
+        daemon_json: >-
+          {{
+            daemon_json | combine({
+              'runtimes': daemon_json.get('runtimes', {}) | combine({
+                'nvidia': {
+                  'args': [],
+                  'path': 'nvidia-container-runtime'
+                }
+              })
+            }, recursive=True)
+          }}
+      when: missing_runtime | default(false)
+      become: yes
+
+    - name: Save updated daemon.json (only if changed)
+      copy:
+        dest: /etc/docker/daemon.json
+        content: "{{ daemon_json | to_nice_json }}"
+        mode: '0644'
+      when: missing_registry or missing_runtime
+      become: yes
+
+    - name: Reload Docker (only if config changed)
+      systemd:
+        name: docker
+        state: restarted
+        daemon_reload: true
+      when: missing_registry or missing_runtime
+      become: yes

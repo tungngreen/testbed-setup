@@ -1,0 +1,47 @@
+
+
+---
+- name: Install NVIDIA Container Toolkit on non-Jetson devices
+  hosts: server
+
+  pre_tasks:
+  - name: Set host-specific credentials for servers
+    set_fact:
+      ansible_user: "{{ server_creds[inventory_hostname].user }}"
+      ansible_password: "{{ server_creds[inventory_hostname].password }}"
+      ansible_become_password: "{{ server_creds[inventory_hostname].become_pass }}"
+    no_log: true
+
+  tasks:
+    - name: Skip Jetsons based on architecture
+      debug:
+        msg: "Skipping Jetson device ({{ ansible_architecture }})"
+
+    - name: Add NVIDIA GPG key
+      apt_key:
+        url: https://nvidia.github.io/nvidia-docker/gpgkey
+        state: present
+      become: yes
+
+    - name: Add NVIDIA container toolkit repository
+      get_url:
+        url: "https://nvidia.github.io/nvidia-docker/ubuntu{{ ansible_distribution_version }}/nvidia-docker.list"
+        dest: /etc/apt/sources.list.d/nvidia-docker.list
+      become: yes
+
+    - name: Update APT cache
+      apt:
+        update_cache: yes
+      become: yes
+
+    - name: Install NVIDIA container toolkit
+      apt:
+        name: nvidia-container-toolkit
+        state: present
+      become: yes
+
+    - name: Restart Docker after toolkit install
+      systemd:
+        name: docker
+        state: restarted
+      become: yes
